@@ -1,0 +1,65 @@
+# Profile Summary
+
+**Session:** {{ session_id }}
+**Name:** {{ name or "unnamed" }}
+**Date:** {{ timestamp }}
+**Evaluator:** {{ evaluator_name }}
+
+---
+
+## Overview
+
+| Metric | Value |
+|--------|-------|
+| Wall Time | {{ "%.3f"|format(wall_time_s) }}s |
+| GPU Time | {{ "%.1f"|format(gpu_time_us) }} us |
+| Kernel Time | {{ "%.1f"|format(kernel_time_us) }} us |
+| Transfer Time | {{ "%.1f"|format(transfer_time_us) }} us |
+| API Overhead | {{ "%.1f"|format(api_time_us) }} us |
+| Unique Kernels | {{ kernels|length }} |
+| Total Invocations | {{ total_invocations }} |
+
+## Hardware
+
+{% if hardware.gpu_name -%}
+- **GPU:** {{ hardware.gpu_name }}
+{% endif -%}
+{% if hardware.gpu_memory_mb -%}
+- **GPU Memory:** {{ hardware.gpu_memory_mb }} MB
+{% endif -%}
+{% if hardware.compute_capability -%}
+- **Compute Capability:** {{ hardware.compute_capability }}
+{% endif -%}
+{% if hardware.driver_version -%}
+- **Driver:** {{ hardware.driver_version }}
+{% endif -%}
+{% if hardware.cuda_version -%}
+- **CUDA:** {{ hardware.cuda_version }}
+{% endif -%}
+{% if hardware.cpu_name -%}
+- **CPU:** {{ hardware.cpu_name }}
+{% endif -%}
+
+## Top Kernels
+
+{% if kernels -%}
+| # | Kernel | Duration (us) | Invocations | Avg (us) | Occupancy |
+|---|--------|--------------|-------------|----------|-----------|
+{% for k in kernels[:10] -%}
+| {{ loop.index }} | {{ k.name[:50] }} | {{ "%.1f"|format(k.duration_us) }} | {{ k.invocations }} | {{ "%.1f"|format(k.avg_duration_us) }} | {{ "%.1f"|format(k.occupancy_pct) }}% |
+{% endfor -%}
+{% else -%}
+No kernel data collected.
+{% endif %}
+
+## Memory Transfers
+
+{% if transfers -%}
+| Direction | Size (MB) | Duration (us) | Throughput (GB/s) |
+|-----------|-----------|---------------|-------------------|
+{% for t in transfers -%}
+| {{ t.direction }} | {{ "%.2f"|format(t.size_bytes / 1048576) }} | {{ "%.1f"|format(t.duration_us) }} | {{ "%.2f"|format(t.throughput_gbps) }} |
+{% endfor -%}
+{% else -%}
+No memory transfer data collected.
+{% endif %}

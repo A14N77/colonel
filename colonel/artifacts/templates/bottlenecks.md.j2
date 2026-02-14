@@ -1,0 +1,32 @@
+# Bottleneck Analysis
+
+**Session:** {{ session_id }}
+**Date:** {{ timestamp }}
+
+---
+
+{% if bottlenecks -%}
+{% for b in bottlenecks -%}
+## {{ loop.index }}. {{ b.title }}
+
+**Severity:** {{ b.severity | upper }}
+**Category:** {{ b.category }}
+{% if b.affected_kernels -%}
+**Affected Kernels:** {{ b.affected_kernels | join(", ") }}
+{% endif %}
+
+{{ b.description }}
+
+{% if b.evidence -%}
+**Evidence:**
+{% for key, val in b.evidence.items() -%}
+- {{ key }}: {{ val }}
+{% endfor -%}
+{% endif %}
+
+---
+
+{% endfor -%}
+{% else -%}
+No bottlenecks identified yet. Run `colonel analyze` to get AI-powered analysis.
+{% endif %}
