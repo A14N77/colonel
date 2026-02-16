@@ -32,6 +32,7 @@ class ProfileContext:
     target: str = "local"
     evaluator: str = "auto"
     name: str | None = None
+    ssh_key: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property

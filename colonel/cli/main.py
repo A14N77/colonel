@@ -68,6 +68,7 @@ def run_profile(
         False, "--no-analyze", help="Skip AI analysis after profiling."
     ),
     working_dir: str = typer.Option(".", "--cwd", "-C", help="Working directory for execution."),
+    ssh_key: str = typer.Option("", "--ssh-key", help="Path to SSH private key file."),
 ) -> None:
     """Profile a GPU application and optionally analyze results.
 
@@ -82,4 +83,5 @@ def run_profile(
         name=name,
         no_analyze=no_analyze,
         working_dir=working_dir,
+        ssh_key=ssh_key or None,
     )

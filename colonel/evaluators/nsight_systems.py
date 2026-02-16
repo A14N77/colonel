@@ -122,6 +122,7 @@ class NsightSystemsEvaluator(BaseEvaluator):
             "--stats", "true",
             "--export", "none",
             "--wait", "all",
+            "--trace-fork-before-exec", "true",
             ctx.full_command,
         ]
         return " ".join(cmd_parts)
