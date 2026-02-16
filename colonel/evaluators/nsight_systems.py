@@ -12,6 +12,8 @@ After profiling, runs `nsys stats` to extract structured CSV data.
 from __future__ import annotations
 
 import re
+import shutil
+from pathlib import Path
 
 from colonel.core.context import ProfileContext
 from colonel.core.result import (
@@ -41,6 +43,42 @@ class NsightSystemsEvaluator(BaseEvaluator):
             nsys_path: Path to nsys executable.
         """
         self._nsys_path = nsys_path
+        self._resolved_nsys_path: str | None = None
+
+    def _candidate_nsys_paths(self) -> list[str]:
+        """Return paths to try for the nsys binary (e.g. Ubuntu puts it off PATH)."""
+        candidates = [self._nsys_path]
+        if "/" not in self._nsys_path:
+            which_nsys = shutil.which("nsys")
+            if which_nsys:
+                candidates.append(which_nsys)
+            candidates.extend([
+                "/usr/local/bin/nsys",
+                "/usr/lib/nsight-systems/bin/nsys",
+                "/usr/bin/nsys",
+            ])
+            # Apt nsight-systems-2025.x installs under /opt/nvidia/nsight-systems/<version>/bin/nsys
+            # Use known version paths to avoid listing the dir (can raise PermissionError).
+            for ver in ("2025.5.2", "2025.3.2", "2024.6.2"):
+                try:
+                    bin_nsys = Path(f"/opt/nvidia/nsight-systems/{ver}/bin/nsys")
+                    if bin_nsys.is_file():
+                        candidates.append(str(bin_nsys))
+                except OSError:
+                    pass
+            # If we can list the dir, add any other versions (newest first)
+            try:
+                opt_nsys = Path("/opt/nvidia/nsight-systems")
+                if opt_nsys.is_dir():
+                    for version_dir in sorted(opt_nsys.iterdir(), reverse=True):
+                        if version_dir.name in ("2025.5.2", "2025.3.2", "2024.6.2"):
+                            continue  # already added
+                        bin_nsys = version_dir / "bin" / "nsys"
+                        if bin_nsys.is_file():
+                            candidates.append(str(bin_nsys))
+            except OSError:
+                pass  # Permission denied or missing dir; static paths already tried
+        return candidates
 
     @property
     def name(self) -> str:
@@ -54,9 +92,18 @@ class NsightSystemsEvaluator(BaseEvaluator):
         )
 
     def is_available(self, target: BaseTarget) -> bool:
-        """Check if nsys is installed on the target."""
-        result = target.run_command(f"{self._nsys_path} --version", timeout=10.0)
-        return result.success
+        """Check if nsys is installed on the target (tries known paths if not on PATH)."""
+        for path in self._candidate_nsys_paths():
+            result = target.run_command(f"{path} --version", timeout=10.0)
+            if result.success:
+                self._resolved_nsys_path = path
+                return True
+        return False
+
+    def _report_base_path(self, ctx: ProfileContext) -> str:
+        """Compute the base path for nsys report files (without extension)."""
+        safe_name = re.sub(r"[^\w\-]", "_", (ctx.name or "profile").strip())[:64]
+        return f"/tmp/colonel_nsys_{safe_name or 'profile'}"
 
     def build_command(self, ctx: ProfileContext) -> str:
         """Build the nsys profile command.
@@ -64,22 +111,25 @@ class NsightSystemsEvaluator(BaseEvaluator):
         Generates a command that profiles the application and writes
         a .nsys-rep file to a temp location.
         """
-        report_file = f"/tmp/colonel_nsys_{ctx.name or 'profile'}"
+        nsys_bin = self._resolved_nsys_path or self._nsys_path
+        report_file = self._report_base_path(ctx)
         cmd_parts = [
-            self._nsys_path,
+            nsys_bin,
             "profile",
             "--output", report_file,
             "--force-overwrite", "true",
             "--trace", "cuda,nvtx,osrt",
             "--stats", "true",
             "--export", "none",
+            "--wait", "all",
             ctx.full_command,
         ]
         return " ".join(cmd_parts)
 
-    def build_stats_command(self, report_path: str) -> str:
+    def _build_stats_command(self, report_base: str) -> str:
         """Build the nsys stats command to extract CSV from a report."""
-        return f"{self._nsys_path} stats --format csv {report_path}.nsys-rep"
+        nsys_bin = self._resolved_nsys_path or self._nsys_path
+        return f"{nsys_bin} stats --format csv --force-export true {report_base}.nsys-rep"
 
     def parse_output(
         self,
@@ -284,11 +334,11 @@ class NsightSystemsEvaluator(BaseEvaluator):
         return "\n".join(section_lines)
 
     def collect(self, ctx: ProfileContext, target: BaseTarget) -> ProfileResult:
-        """Run nsys profile and parse results.
+        """Run nsys profile, then nsys stats --format csv, and parse results.
 
-        Overrides base to handle the two-step process:
-        1. Run nsys profile (with --stats true for inline stats)
-        2. Parse the stats output
+        Two-step process:
+        1. Run nsys profile (captures trace, --stats true gives text summary)
+        2. Run nsys stats --format csv on the report for machine-readable output
 
         Args:
             ctx: What to profile.
@@ -304,17 +354,28 @@ class NsightSystemsEvaluator(BaseEvaluator):
             env=ctx.env,
         )
 
+        # Store the raw text stats output (useful for debugging)
+        raw_text = cmd_result.stdout + "\n" + cmd_result.stderr
+
+        # Run nsys stats --format csv for machine-readable output
+        report_base = self._report_base_path(ctx)
+        stats_cmd = self._build_stats_command(report_base)
+        stats_result = target.run_command(stats_cmd, timeout=60.0)
+
+        # Parse the CSV stats output (preferred) or fall back to text
+        csv_output = stats_result.stdout if stats_result.success else ""
         profile_result = self.parse_output(
-            cmd_result.stdout,
+            csv_output or cmd_result.stdout,
             cmd_result.stderr,
+            raw_report=raw_text,
         )
         profile_result.wall_time_s = cmd_result.duration_s
         profile_result.exit_code = cmd_result.exit_code
 
         if not cmd_result.success:
+            error_detail = (cmd_result.stderr or cmd_result.stdout or "")[:500]
             profile_result.errors.append(
-                f"nsys exited with code {cmd_result.exit_code}: "
-                f"{cmd_result.stderr[:500]}"
+                f"nsys exited with code {cmd_result.exit_code}: {error_detail}"
             )
 
         return profile_result

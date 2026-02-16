@@ -7,12 +7,12 @@ in a tool-agnostic format that the analysis agent and reports can consume.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from enum import StrEnum
+from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 
-class MetricCategory(StrEnum):
+class MetricCategory(str, Enum):
     """Categories for profiling metrics."""
 
     TIMING = "timing"
@@ -24,7 +24,7 @@ class MetricCategory(StrEnum):
     OTHER = "other"
 
 
-class BottleneckSeverity(StrEnum):
+class BottleneckSeverity(str, Enum):
     """Severity levels for identified bottlenecks."""
 
     CRITICAL = "critical"
@@ -271,7 +271,7 @@ class ProfileResult:
 
     session_id: str = ""
     timestamp: str = field(
-        default_factory=lambda: datetime.now(UTC).isoformat()
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     evaluator_name: str = ""
     wall_time_s: float = 0.0

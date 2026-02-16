@@ -10,8 +10,10 @@ The executor is the central coordination point:
 
 from __future__ import annotations
 
+import csv
+import io
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from colonel.config.settings import ColonelSettings, get_settings
 from colonel.core.context import ProfileContext
@@ -57,12 +59,14 @@ def _collect_hardware_info(target: BaseTarget) -> HardwareInfo:
         timeout=15.0,
     )
     if gpu_result.success and gpu_result.stdout.strip():
-        parts = gpu_result.stdout.strip().split(",")
-        if len(parts) >= 4:
-            info.gpu_name = parts[0].strip()
-            info.gpu_memory_mb = safe_int(parts[1].strip())
-            info.driver_version = parts[2].strip()
-            info.compute_capability = parts[3].strip()
+        # Parse as CSV so GPU names containing commas don't break
+        reader = csv.reader(io.StringIO(gpu_result.stdout.strip()))
+        row = next(reader, None)
+        if row and len(row) >= 4:
+            info.gpu_name = row[0].strip()
+            info.gpu_memory_mb = safe_int(row[1].strip())
+            info.driver_version = row[2].strip()
+            info.compute_capability = row[3].strip()
 
     # CUDA version
     cuda_result = target.run_command(
@@ -150,7 +154,7 @@ class Executor:
 
             # Enrich the result
             result.session_id = session_id
-            result.timestamp = datetime.now(UTC).isoformat()
+            result.timestamp = datetime.now(timezone.utc).isoformat()
             result.hardware = hardware
 
         return result

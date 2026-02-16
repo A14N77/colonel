@@ -19,7 +19,7 @@ from colonel.core.result import (
 )
 from colonel.evaluators.base import BaseEvaluator
 from colonel.targets.base import BaseTarget
-from colonel.utils.parsers import parse_ncu_csv, safe_float, safe_int
+from colonel.utils.parsers import parse_duration_string, parse_ncu_csv, safe_float, safe_int
 
 
 class NsightComputeEvaluator(BaseEvaluator):
@@ -187,10 +187,9 @@ class NsightComputeEvaluator(BaseEvaluator):
         block = ""
 
         for row in launches:
-            # Duration
+            # Duration: parse unit (ns/us/ms/s) and convert to µs
             dur = self._find_metric(row, duration_col, alt_names.get(duration_col, []))
-            dur_str = str(dur).lower()
-            dur_us = safe_float(dur) / 1000.0 if "ns" not in dur_str else safe_float(dur) / 1000.0
+            dur_us = parse_duration_string(str(dur))
             total_duration_us += dur_us
 
             # Occupancy

@@ -104,8 +104,20 @@ class BaseEvaluator(abc.ABC):
         profile_result.evaluator_name = self.name
 
         if not result.success:
+            # Profilers often print errors to stdout (e.g. ncu), so include both
+            error_detail = (result.stderr or result.stdout or "")[:500]
             profile_result.errors.append(
-                f"Profiler exited with code {result.exit_code}: {result.stderr[:500]}"
+                f"Profiler exited with code {result.exit_code}: {error_detail}"
             )
+            # Detect common environment issues and add actionable guidance
+            combined = result.stdout + result.stderr
+            if "ERR_NVGPUCTRPERM" in combined:
+                profile_result.errors.append(
+                    "GPU performance counter access denied. Fix: "
+                    "run 'sudo sh -c \"echo 0 > /proc/driver/nvidia/params/RmProfilingAdminOnly\"' "
+                    "or add 'options nvidia NVreg_RestrictProfilingToAdminUsers=0' to "
+                    "/etc/modprobe.d/ncu-perms.conf and reboot. "
+                    "See https://developer.nvidia.com/ERR_NVGPUCTRPERM"
+                )
 
         return profile_result
