@@ -16,7 +16,7 @@ from colonel.agent.prompts import (
     build_analysis_prompt,
     format_kernel_section,
 )
-from colonel.agent.provider import AgentMessage, AnthropicProvider, BaseLLMProvider
+from colonel.agent.provider import AgentMessage, BaseLLMProvider, get_provider
 from colonel.config.settings import ColonelSettings, get_settings
 from colonel.core.result import ProfileResult
 
@@ -57,18 +57,35 @@ class AnalysisAgent:
         """Initialize the analysis agent.
 
         Args:
-            provider: LLM provider to use. If None, creates AnthropicProvider.
+            provider: LLM provider to use. If None, builds one from settings
+                      (supports anthropic, nvidia, huggingface, openai).
             settings: Optional settings override.
         """
         self._settings = settings or get_settings()
         if provider is not None:
             self._provider = provider
         else:
-            self._provider = AnthropicProvider(
-                api_key=self._settings.anthropic_api_key,
-                model=self._settings.anthropic_model,
-            )
+            self._provider = self._build_provider()
         self._conversation: list[AgentMessage] = []
+
+    def _build_provider(self) -> BaseLLMProvider:
+        """Build the LLM provider from current settings."""
+        name = self._settings.llm_provider.strip().lower()
+
+        key_map = {
+            "anthropic": (self._settings.anthropic_api_key, self._settings.anthropic_model),
+            "nvidia": (self._settings.nvidia_api_key, self._settings.nvidia_model),
+            "huggingface": (self._settings.huggingface_api_key, self._settings.huggingface_model),
+            "openai": (self._settings.openai_api_key, self._settings.openai_model),
+        }
+
+        api_key, model = key_map.get(name, ("", ""))
+
+        kwargs: dict[str, str] = {"api_key": api_key, "model": model}
+        if name == "openai":
+            kwargs["base_url"] = self._settings.openai_base_url
+
+        return get_provider(name, **kwargs)
 
     def analyze(
         self,

@@ -8,139 +8,187 @@
 </p>
 
 <p align="center">
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white" alt="Python 3.11+"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white" alt="Python 3.10+"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License MIT"></a>
 </p>
 
 <p align="center">
-  <a href="#installation">Installation</a> &bull;
-  <a href="#quick-start">Quick Start</a> &bull;
+  <a href="#getting-started">Getting Started</a> &bull;
+  <a href="#workflow">Workflow</a> &bull;
   <a href="#commands">Commands</a> &bull;
-  <a href="#architecture">Architecture</a> &bull;
-  <a href="#contributing">Contributing</a>
+  <a href="#ai-providers">AI Providers</a> &bull;
+  <a href="#architecture">Architecture</a>
 </p>
 
 ---
 
-Colonel is an open-source, AI-powered command-line tool for profiling GPU kernels and applications. It wraps NVIDIA profiling tools (Nsight Systems, Nsight Compute), collects structured metrics, and uses an LLM-based analysis agent to identify bottlenecks and recommend optimizations -- all from a single CLI.
+Colonel is an open-source, AI-powered command-line tool for profiling GPU kernels and applications. It wraps NVIDIA profiling tools (Nsight Systems, Nsight Compute), collects structured metrics, and uses an LLM analysis agent to identify bottlenecks and recommend optimizations -- all from a single CLI.
 
-**Key features:**
+## Getting Started
 
-- **Profile** GPU applications locally or on remote machines via SSH
-- **Analyze** profiling results with an AI agent (Anthropic Claude) that identifies bottlenecks and suggests optimizations
-- **Compare** runs side-by-side to track performance changes
-- **Session management** with checkpoints, so you never lose a profiling run
-- **Artifact reports** -- structured markdown reports (summary, bottlenecks, recommendations) saved alongside raw data
-- **Extensible** -- pluggable evaluators, targets, and LLM providers
-
-## Installation
-
-Requires Python 3.11+ and NVIDIA profiling tools (`nsys` and/or `ncu`) installed on the target machine.
+### 1. Install Colonel
 
 ```bash
+git clone https://github.com/colonel-gpu/colonel.git
+cd colonel
+python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
-### Set up your API key
+### 2. Run the Setup Wizard
 
-Colonel uses Anthropic Claude for AI-powered analysis. Set your API key:
+The setup wizard checks your environment, installs missing tools, configures
+GPU profiling permissions, and sets up your AI provider.
 
 ```bash
-colonel config set anthropic_api_key sk-ant-your-key-here
+colonel setup
 ```
 
-Or via environment variable:
+The wizard walks through seven steps:
+
+| Step | What it checks | Auto-fix? |
+|------|---------------|-----------|
+| 1. NVIDIA Driver | `nvidia-smi`, GPU model, driver version | -- |
+| 2. CUDA Toolkit | `nvcc` on PATH or in `/usr/local/cuda-*` | Suggests PATH fix |
+| 3. Nsight Systems | `nsys` in PATH or common install dirs | Offers `apt install` |
+| 4. Nsight Compute | `ncu` in PATH or CUDA bin dirs | -- |
+| 5. GPU Counters | `NVreg_RestrictProfilingToAdminUsers` setting | Live module reload or reboot |
+| 6. AI Provider | API key for Anthropic, NVIDIA NIM, or HuggingFace | Interactive config |
+| 7. Smoke Test | Profiles `gpu_smoke/matmul.py` with nsys | -- |
+
+You can also run a non-interactive check anytime:
 
 ```bash
-export COLONEL_ANTHROPIC_API_KEY=sk-ant-your-key-here
+colonel setup --check
 ```
 
-### Verify installation
+> **Note on GPU Counter Permissions:** Nsight Compute needs unrestricted access
+> to hardware performance counters. If step 5 reports counters are restricted,
+> the wizard will write a modprobe config and attempt a live nvidia module reload.
+> If the reload fails (GPU in use by another process), a reboot is required.
+> After reboot, run `colonel setup --check` to verify.
+
+### 3. Verify Everything Works
 
 ```bash
-colonel --version
-colonel profile detect
+colonel profile detect          # Should show: nsys, ncu
+colonel run python gpu_smoke/matmul.py --name my-first-run
 ```
 
-## Quick Start
+If everything is set up correctly, you'll see a kernel table, memory transfer
+summary, and an AI-generated performance analysis.
 
-### 1. Profile a GPU application
+## Workflow
 
-```bash
-colonel profile run ./my_cuda_kernel --name baseline
+Colonel follows a **profile → analyze → iterate** loop:
+
+```
+  colonel run ./my_app           Profile your application
+        │
+        ▼
+  Kernel table + metrics         See GPU time, occupancy, throughput
+  AI analysis + recommendations  Bottlenecks ranked by severity
+  Session saved                  checkpoint.json + markdown reports
+        │
+        ▼
+  colonel analyze --deeper       Ask follow-up questions
+  colonel analyze --with-source  Include source code for specific fixes
+        │
+        ▼
+  Make changes to your code
+        │
+        ▼
+  colonel run ./my_app_v2        Re-profile after changes
+        │
+        ▼
+  colonel session compare A B    Side-by-side comparison with AI
 ```
 
-This will:
-1. Auto-detect the best profiler (nsys or ncu)
-2. Run your application under the profiler
-3. Parse and display metrics in a rich table
-4. Run AI analysis on the results
-5. Save everything as a session checkpoint
-
-### 2. Analyze results with AI
+### Quick Example
 
 ```bash
-# Analyze the most recent run
+# Profile a PyTorch training script with Nsight Systems
+colonel run python train.py --name baseline --evaluator nsys
+
+# Profile with Nsight Compute for detailed per-kernel metrics
+colonel run python train.py --name baseline-ncu --evaluator ncu
+
+# Analyze the latest run (or specify --session <id>)
 colonel analyze
 
-# Deeper follow-up analysis
-colonel analyze --deeper --question "Why is memory throughput so low?"
+# Dig deeper into a specific issue
+colonel analyze --deeper --question "Why is GEMM occupancy only 30%?"
 
-# Include source code for more specific recommendations
-colonel analyze --with-source ./kernel.cu
-```
+# Include source code for code-specific recommendations
+colonel analyze --with-source ./model.py
 
-### 3. Compare runs
-
-```bash
-# Profile after a change
-colonel profile run ./my_cuda_kernel_v2 --name optimized
-
-# Compare the two runs
+# After making changes, compare before and after
+colonel run python train.py --name optimized
 colonel session compare <baseline-id> <optimized-id> --ai
 ```
 
-### 4. Browse session history
+### Choosing a Profiler
 
-```bash
-colonel session list
-colonel session show <session-id>
-```
+| Profiler | Best for | Speed | Detail level |
+|----------|----------|-------|-------------|
+| **nsys** (Nsight Systems) | System-level overview, API overhead, memory transfers, timeline | Fast | Medium |
+| **ncu** (Nsight Compute) | Per-kernel deep dive: occupancy, memory throughput, compute utilization, stalls | Slow (replays kernels) | High |
+
+**Recommendation:** Start with `nsys` for a broad picture, then use `ncu` on
+specific kernels that need investigation.
 
 ## Commands
 
-### `colonel profile`
+### `colonel setup`
 
+Interactive environment setup wizard.
+
+```bash
+colonel setup           # Full interactive wizard
+colonel setup --check   # Non-interactive environment check
 ```
-colonel profile run <command> [OPTIONS]
+
+### `colonel run` (shortcut for `colonel profile run`)
+
+Profile a GPU application and optionally run AI analysis.
+
+```bash
+colonel run <command> [args...] [OPTIONS]
 
 Options:
-  --target, -t     Target: "local" or "ssh://user@host" (default: local)
-  --evaluator, -e  Profiler: "nsys", "ncu", or "auto" (default: auto)
+  --target, -t     "local" or "ssh://user@host"    (default: local)
+  --evaluator, -e  "nsys", "ncu", or "auto"        (default: auto)
   --name, -n       Human-readable label for this run
   --no-analyze     Skip AI analysis after profiling
   --cwd, -C        Working directory for execution
 ```
 
-```
-colonel profile detect [--target TARGET]
+### `colonel profile`
+
+```bash
+colonel profile run <command> [OPTIONS]    # Same as colonel run
+colonel profile detect [--target TARGET]   # List available profilers
 ```
 
 ### `colonel analyze`
 
-```
+Run AI-powered analysis on profiling results.
+
+```bash
 colonel analyze [OPTIONS]
 
 Options:
   --session, -s     Session ID to analyze (default: latest)
-  --deeper, -d      Perform deeper follow-up analysis
+  --deeper, -d      Follow-up analysis with more detail
   --with-source     Path to source code for context
   --question, -q    Specific question for the agent
 ```
 
 ### `colonel session`
 
-```
+Manage saved profiling sessions.
+
+```bash
 colonel session list [--limit N]
 colonel session show <session-id>
 colonel session compare <id-a> <id-b> [--ai]
@@ -149,119 +197,65 @@ colonel session delete <session-id> [--force]
 
 ### `colonel config`
 
-```
-colonel config set <key> <value>
-colonel config show
-colonel config path
-```
+View and update configuration.
 
-## Architecture
-
-Colonel's architecture is modeled after research in LLM-assisted GPU optimization:
-
-- **PEAK** (Microsoft Research) -- modular kernel context + evaluators + performance workflows
-- **KForge** (Gimlet Labs / Stanford) -- dedicated performance analysis agent that interprets profiling data
-- **ParaCodex** (Technion / Stanford) -- artifact-driven reasoning with structured reports
-
-```
-colonel/
-  cli/                  # Typer CLI commands
-    main.py             # Entry point
-    profile_cmd.py      # `colonel profile`
-    analyze_cmd.py      # `colonel analyze`
-    session_cmd.py      # `colonel session`
-    config_cmd.py       # `colonel config`
-  core/                 # Core engine
-    context.py          # ProfileContext (what to profile)
-    result.py           # ProfileResult, Metric, KernelSummary, etc.
-    executor.py         # Orchestrates targets + evaluators
-    session.py          # Session manager with checkpoints
-  evaluators/           # Profiling tool wrappers
-    base.py             # BaseEvaluator ABC
-    nsight_systems.py   # nsys wrapper
-    nsight_compute.py   # ncu wrapper
-    registry.py         # Auto-detection and selection
-  targets/              # Execution backends
-    base.py             # BaseTarget ABC
-    local.py            # Local subprocess
-    ssh.py              # Remote via SSH/paramiko
-  agent/                # LLM-powered analysis
-    analyzer.py         # AnalysisAgent
-    prompts.py          # Prompt templates
-    provider.py         # LLM provider interface (Anthropic)
-  artifacts/            # Report generation
-    report.py           # Jinja2-based markdown reports
-    templates/          # Report templates
-  config/               # Configuration
-    settings.py         # Pydantic settings
-  utils/                # Utilities
-    parsers.py          # CSV/profiler output parsers
-    rich_output.py      # Rich console formatting
+```bash
+colonel config show              # Show all settings
+colonel config set <key> <value> # Set a config value
+colonel config path              # Show config file location
 ```
 
-### Data Flow
+## AI Providers
 
-```
-User runs: colonel profile run ./my_kernel
-    |
-    v
-ProfileContext ----> Executor ----> Target (local/SSH)
-                        |                  |
-                        v                  v
-                   Evaluator ---------> nsys/ncu
-                        |
-                        v
-                   ProfileResult
-                        |
-              +---------+---------+
-              |                   |
-              v                   v
-         AnalysisAgent      SessionManager
-              |                   |
-              v                   v
-         Recommendations    Checkpoint saved
-              |                   |
-              v                   v
-         Rich output        Artifact reports
-         to terminal        (.colonel/sessions/)
+Colonel supports multiple LLM providers for the analysis agent. Configure
+your preferred provider during `colonel setup` or manually:
+
+### Anthropic Claude (default)
+
+```bash
+colonel config set llm_provider anthropic
+colonel config set anthropic_api_key sk-ant-your-key
 ```
 
-## Configuration
+### NVIDIA Nemotron (via NIM API)
 
-Colonel looks for configuration in this order:
+Uses NVIDIA's OpenAI-compatible endpoint at `build.nvidia.com`.
 
+```bash
+colonel config set llm_provider nvidia
+colonel config set nvidia_api_key nvapi-your-key
+```
+
+Default model: `nvidia/llama-3.3-nemotron-super-49b-v1.5`
+
+### HuggingFace Inference
+
+```bash
+colonel config set llm_provider huggingface
+colonel config set huggingface_api_key hf_your-token
+```
+
+### Configuration Reference
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `llm_provider` | `anthropic` | AI provider: `anthropic`, `nvidia`, `huggingface` |
+| `anthropic_api_key` | | Anthropic API key |
+| `anthropic_model` | `claude-sonnet-4-20250514` | Claude model for analysis |
+| `nvidia_api_key` | | NVIDIA NIM API key |
+| `nvidia_model` | `nvidia/llama-3.3-nemotron-super-49b-v1.5` | Nemotron model |
+| `huggingface_api_key` | | HuggingFace API token |
+| `huggingface_model` | `nvidia/llama-3.1-nemotron-70b-instruct` | HF model |
+| `agent_max_tokens` | `4096` | Max tokens for agent responses |
+| `default_evaluator` | `auto` | Default profiler (`nsys`/`ncu`/`auto`) |
+| `default_target` | `local` | Default target |
+| `sessions_dir` | `.colonel/sessions` | Session storage directory |
+
+Configuration is loaded from (in priority order):
 1. Environment variables prefixed with `COLONEL_`
 2. `.colonel/config.json` in the current directory
 3. `~/.colonel/config.json` in your home directory
 4. Built-in defaults
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `anthropic_api_key` | (empty) | Anthropic API key |
-| `anthropic_model` | `claude-sonnet-4-20250514` | Claude model for analysis |
-| `agent_max_tokens` | `4096` | Max tokens for agent responses |
-| `default_evaluator` | `auto` | Default profiler (nsys/ncu/auto) |
-| `default_target` | `local` | Default target |
-| `nsys_path` | `nsys` | Path to nsys binary |
-| `ncu_path` | `ncu` | Path to ncu binary |
-| `sessions_dir` | `.colonel/sessions` | Session storage directory |
-
-## Remote Profiling
-
-Colonel supports profiling on remote GPU machines via SSH:
-
-```bash
-# Profile on a remote server
-colonel profile run ./my_kernel --target ssh://user@gpu-server
-
-# With a non-standard port
-colonel profile run ./my_kernel --target ssh://user@gpu-server:2222
-```
-
-Requirements for the remote machine:
-- SSH access with key-based authentication
-- `nsys` or `ncu` installed and in PATH
-- Your application already deployed
 
 ## Session Storage
 
@@ -272,29 +266,85 @@ All profiling data is stored in `.colonel/sessions/`:
   <session-id>/
     checkpoint.json       # Full checkpoint (context + result + analysis)
     profile_summary.md    # Human-readable summary
-    bottlenecks.md        # Bottleneck analysis (if available)
     recommendations.md    # AI recommendations (if analyzed)
     raw_output.txt        # Raw profiler output
 ```
 
-## Contributing
+## Architecture
 
-Contributions are welcome! Colonel is designed to be extensible:
+```
+colonel/
+  cli/                  # Typer CLI commands
+    main.py             # Entry point
+    profile_cmd.py      # colonel profile / colonel run
+    analyze_cmd.py      # colonel analyze
+    session_cmd.py      # colonel session
+    config_cmd.py       # colonel config
+    setup_cmd.py        # colonel setup
+  core/                 # Core engine
+    context.py          # ProfileContext (what to profile)
+    result.py           # ProfileResult, Metric, KernelSummary
+    executor.py         # Orchestrates targets + evaluators
+    session.py          # Session manager with checkpoints
+  evaluators/           # Profiling tool wrappers
+    nsight_systems.py   # nsys wrapper
+    nsight_compute.py   # ncu wrapper
+    registry.py         # Auto-detection and selection
+  targets/              # Execution backends
+    local.py            # Local subprocess
+    ssh.py              # Remote via SSH/paramiko
+  agent/                # LLM-powered analysis
+    analyzer.py         # AnalysisAgent
+    prompts.py          # Prompt templates
+    provider.py         # LLM providers (Anthropic, OpenAI-compatible)
+  artifacts/            # Report generation (Jinja2 templates)
+  config/               # Pydantic settings
+  utils/                # Parsers and Rich console output
+```
 
-- **New evaluators** -- Add support for AMD ROCm (`rocprof`), Apple Metal, etc. by implementing `BaseEvaluator`
-- **New targets** -- Add cloud targets (AWS, GCP) by implementing `BaseTarget`
-- **New LLM providers** -- Add OpenAI, local models, etc. by implementing `BaseLLMProvider`
-- **Better prompts** -- Improve the analysis agent's prompts in `agent/prompts.py`
+### Data Flow
+
+```
+colonel run ./my_kernel
+    │
+    ▼
+ProfileContext ──▶ Executor ──▶ Target (local / SSH)
+                      │                │
+                      ▼                ▼
+                 Evaluator ─────▶ nsys / ncu
+                      │
+                      ▼
+                 ProfileResult
+                      │
+            ┌─────────┴─────────┐
+            ▼                   ▼
+      AnalysisAgent       SessionManager
+            │                   │
+            ▼                   ▼
+      Recommendations    Checkpoint + reports
+      to terminal        .colonel/sessions/
+```
+
+## Remote Profiling (SSH)
+
+Colonel supports profiling on remote GPU machines via SSH:
 
 ```bash
-# Install development dependencies
-pip install -e ".[dev]"
+colonel profile run ./my_kernel --target ssh://user@gpu-server
+colonel profile run ./my_kernel --target ssh://user@gpu-server:2222
+```
 
-# Run lints
+Requirements for the remote machine:
+- SSH access with key-based authentication (via ssh-agent or key file)
+- `nsys` or `ncu` installed and in PATH
+- Your application already deployed
+
+## Contributing
+
+```bash
+pip install -e ".[dev]"
 ruff check colonel/
 mypy colonel/
-
-# Run tests
 pytest
 ```
 
@@ -304,7 +354,7 @@ MIT License. See [LICENSE](LICENSE) for details.
 
 ## Acknowledgments
 
-Colonel's architecture is inspired by recent research in LLM-assisted GPU optimization:
+Colonel's architecture is inspired by research in LLM-assisted GPU optimization:
 
 - [PEAK](https://arxiv.org/abs/2512.19018) -- Natural language transformations for GPU kernel optimization
 - [KForge](https://arxiv.org/abs/2511.13274) -- Program synthesis for diverse AI hardware accelerators

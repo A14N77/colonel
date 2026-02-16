@@ -36,8 +36,14 @@ class ProfileContext:
 
     @property
     def full_command(self) -> str:
-        """Return the full command string including arguments."""
-        parts = [self.command, *self.args]
+        """Return the full command string including arguments.
+
+        Arguments containing shell metacharacters are quoted so the
+        resulting string is safe for ``shell=True`` execution.
+        """
+        import shlex
+
+        parts = [self.command] + [shlex.quote(a) for a in self.args]
         return " ".join(parts)
 
     @property
