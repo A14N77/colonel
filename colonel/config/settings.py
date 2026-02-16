@@ -51,6 +51,10 @@ class ColonelSettings(BaseSettings):
     )
 
     # --- LLM provider ---
+    llm_provider: str = Field(
+        default="anthropic",
+        description="LLM provider: 'anthropic', 'nvidia', 'huggingface', or 'openai'.",
+    )
     anthropic_api_key: str = Field(
         default="",
         description="Anthropic API key for the analysis agent.",
@@ -58,6 +62,34 @@ class ColonelSettings(BaseSettings):
     anthropic_model: str = Field(
         default="claude-sonnet-4-20250514",
         description="Anthropic model to use for analysis.",
+    )
+    nvidia_api_key: str = Field(
+        default="",
+        description="NVIDIA NIM API key (build.nvidia.com) for Nemotron models.",
+    )
+    nvidia_model: str = Field(
+        default="nvidia/llama-3.3-nemotron-super-49b-v1.5",
+        description="NVIDIA NIM model to use for analysis.",
+    )
+    huggingface_api_key: str = Field(
+        default="",
+        description="HuggingFace API token for inference providers.",
+    )
+    huggingface_model: str = Field(
+        default="nvidia/llama-3.1-nemotron-70b-instruct",
+        description="HuggingFace model to use for analysis.",
+    )
+    openai_api_key: str = Field(
+        default="",
+        description="API key for custom OpenAI-compatible endpoints.",
+    )
+    openai_base_url: str = Field(
+        default="",
+        description="Base URL for custom OpenAI-compatible endpoints.",
+    )
+    openai_model: str = Field(
+        default="",
+        description="Model name for custom OpenAI-compatible endpoints.",
     )
     agent_max_tokens: int = Field(
         default=4096,

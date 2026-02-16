@@ -33,6 +33,7 @@ def run(
         False, "--no-analyze", help="Skip AI analysis after profiling."
     ),
     working_dir: str = typer.Option(".", "--cwd", "-C", help="Working directory for execution."),
+    ssh_key: str = typer.Option("", "--ssh-key", help="Path to SSH private key file."),
 ) -> None:
     """Profile a GPU application.
 
@@ -44,6 +45,7 @@ def run(
         colonel profile run ./my_kernel
         colonel profile run "python train.py" --name baseline --evaluator ncu
         colonel profile run ./app --target ssh://user@gpu-server
+        colonel profile run ./app --target ssh://user@host --ssh-key ~/.ssh/id_rsa
     """
     _run_profile(
         command=command,
@@ -53,6 +55,7 @@ def run(
         name=name,
         no_analyze=no_analyze,
         working_dir=working_dir,
+        ssh_key=ssh_key or None,
     )
 
 
@@ -85,6 +88,7 @@ def _run_profile(
     name: str,
     no_analyze: bool,
     working_dir: str = ".",
+    ssh_key: str | None = None,
 ) -> None:
     """Internal implementation for the profile command.
 
@@ -96,6 +100,7 @@ def _run_profile(
         name: Run label.
         no_analyze: Whether to skip analysis.
         working_dir: Working directory.
+        ssh_key: Optional path to SSH private key file.
     """
     from rich.progress import Progress, SpinnerColumn, TextColumn
 
@@ -113,6 +118,7 @@ def _run_profile(
         evaluator=evaluator,
         name=name,
         working_dir=working_dir,
+        ssh_key=ssh_key,
     )
 
     executor = Executor()

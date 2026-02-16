@@ -32,12 +32,19 @@ class ProfileContext:
     target: str = "local"
     evaluator: str = "auto"
     name: str | None = None
+    ssh_key: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def full_command(self) -> str:
-        """Return the full command string including arguments."""
-        parts = [self.command, *self.args]
+        """Return the full command string including arguments.
+
+        Arguments containing shell metacharacters are quoted so the
+        resulting string is safe for ``shell=True`` execution.
+        """
+        import shlex
+
+        parts = [self.command] + [shlex.quote(a) for a in self.args]
         return " ".join(parts)
 
     @property

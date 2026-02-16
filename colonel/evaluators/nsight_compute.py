@@ -19,7 +19,7 @@ from colonel.core.result import (
 )
 from colonel.evaluators.base import BaseEvaluator
 from colonel.targets.base import BaseTarget
-from colonel.utils.parsers import parse_duration_string, parse_ncu_csv, safe_float, safe_int
+from colonel.utils.parsers import parse_duration_string, parse_ncu_csv, pivot_ncu_rows, safe_float, safe_int
 
 
 class NsightComputeEvaluator(BaseEvaluator):
@@ -78,11 +78,12 @@ class NsightComputeEvaluator(BaseEvaluator):
     ) -> ProfileResult:
         """Parse ncu CSV output into ProfileResult.
 
-        ncu --csv outputs one row per kernel launch with columns for
-        each collected metric.
+        ncu ``--csv --set full`` outputs a long-format CSV with one row
+        per metric per kernel launch.  We pivot that into per-launch
+        dicts grouped by kernel name, then build summaries.
 
         Args:
-            stdout: ncu CSV output.
+            stdout: ncu CSV output (may include app stdout).
             stderr: Stderr output.
             raw_report: Optional additional report content.
 
@@ -97,20 +98,15 @@ class NsightComputeEvaluator(BaseEvaluator):
         if not rows:
             return result
 
-        # Aggregate kernel data: ncu may have multiple rows per kernel
-        # (one per launch). Group by kernel name.
-        kernel_data: dict[str, list[dict[str, str]]] = {}
-        for row in rows:
-            name = row.get("Kernel Name", row.get("kernel_name", ""))
-            if not name:
-                continue
-            kernel_data.setdefault(name, []).append(row)
+        # Pivot long-format rows into {kernel_name: [launch_dict, …]}
+        kernel_data = pivot_ncu_rows(rows)
+        if not kernel_data:
+            return result
 
         for name, launches in kernel_data.items():
             kernel = self._build_kernel_summary(name, launches)
             result.kernels.append(kernel)
 
-            # Collect per-kernel metrics
             for metric in kernel.metrics:
                 result.metrics.append(metric)
 
@@ -139,11 +135,15 @@ class NsightComputeEvaluator(BaseEvaluator):
         name: str,
         launches: list[dict[str, str]],
     ) -> KernelSummary:
-        """Build a KernelSummary from ncu rows for a single kernel.
+        """Build a KernelSummary from pivoted ncu dicts for a single kernel.
+
+        Each *launch* dict maps metric names (e.g. ``"Duration"``,
+        ``"Achieved Occupancy"``) directly to string values, plus
+        ``"Block Size"`` / ``"Grid Size"`` from the CSV columns.
 
         Args:
             name: Kernel function name.
-            launches: List of ncu CSV rows for this kernel.
+            launches: Pivoted dicts, one per kernel launch.
 
         Returns:
             KernelSummary with aggregated metrics.
@@ -151,73 +151,67 @@ class NsightComputeEvaluator(BaseEvaluator):
         total_duration_us = 0.0
         metrics: list[Metric] = []
 
-        # Common ncu metric column names
-        duration_col = "Duration"
-        occupancy_col = "Achieved Occupancy"
-        mem_throughput_col = "Memory Throughput"
-        compute_throughput_col = "Compute (SM) Throughput"
-        registers_col = "Registers Per Thread"
-        shared_mem_col = "Static SMem Per Block"
-        grid_size_col = "Grid Size"
-        block_size_col = "Block Size"
-
-        # Alternate column names (ncu versions vary)
-        alt_names = {
-            duration_col: ["gpu__time_duration.sum", "Duration"],
-            occupancy_col: [
-                "sm__warps_active.avg.pct_of_peak_sustained_active",
-                "Achieved Occupancy",
-            ],
-            mem_throughput_col: [
-                "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
-                "Memory Throughput",
-            ],
-            compute_throughput_col: [
-                "sm__throughput.avg.pct_of_peak_sustained_elapsed",
-                "Compute (SM) Throughput",
-            ],
-        }
-
         occupancy_sum = 0.0
         mem_throughput_sum = 0.0
         compute_throughput_sum = 0.0
+        sm_busy_sum = 0.0
+        l2_hit_sum = 0.0
         registers = 0
         shared_mem = 0
         grid = ""
         block = ""
 
         for row in launches:
-            # Duration: parse unit (ns/us/ms/s) and convert to µs
-            dur = self._find_metric(row, duration_col, alt_names.get(duration_col, []))
-            dur_us = parse_duration_string(str(dur))
+            # Duration – ncu reports in nanoseconds; attach unit for parser
+            dur_val = self._find_metric(row, "Duration", [
+                "GPU Speed Of Light Throughput::Duration",
+                "gpu__time_duration.sum",
+            ])
+            dur_unit = row.get("Duration__unit", "ns")
+            dur_us = parse_duration_string(f"{dur_val} {dur_unit}")
             total_duration_us += dur_us
 
-            # Occupancy
-            occ = self._find_metric(row, occupancy_col, alt_names.get(occupancy_col, []))
+            # Achieved occupancy (%)
+            occ = self._find_metric(row, "Achieved Occupancy", [
+                "Occupancy::Achieved Occupancy",
+                "sm__warps_active.avg.pct_of_peak_sustained_active",
+            ])
             occupancy_sum += safe_float(occ)
 
-            # Memory throughput
-            mem = self._find_metric(
-                row, mem_throughput_col, alt_names.get(mem_throughput_col, [])
-            )
+            # Memory throughput (% of peak) – from Speed Of Light section
+            mem = self._find_metric(row, "DRAM Throughput", [
+                "GPU Speed Of Light Throughput::Memory Throughput",
+                "GPU Speed Of Light Throughput::DRAM Throughput",
+                "Memory Throughput",
+                "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+            ])
             mem_throughput_sum += safe_float(mem)
 
-            # Compute throughput
-            comp = self._find_metric(
-                row, compute_throughput_col, alt_names.get(compute_throughput_col, [])
-            )
+            # Compute (SM) throughput (%)
+            comp = self._find_metric(row, "Compute (SM) Throughput", [
+                "GPU Speed Of Light Throughput::Compute (SM) Throughput",
+                "sm__throughput.avg.pct_of_peak_sustained_elapsed",
+            ])
             compute_throughput_sum += safe_float(comp)
+
+            # Extra useful metrics
+            sm_busy_sum += safe_float(row.get("SM Busy", "0"))
+            l2_hit_sum += safe_float(row.get("L2 Hit Rate", "0"))
 
             # Static info (take from first launch)
             if not grid:
-                grid = row.get(grid_size_col, row.get("grid_size", ""))
-                block = row.get(block_size_col, row.get("block_size", ""))
-                registers = safe_int(
-                    row.get(registers_col, row.get("registers_per_thread", "0"))
-                )
-                shared_mem = safe_int(
-                    row.get(shared_mem_col, row.get("shared_memory", "0"))
-                )
+                grid = row.get("Grid Size", "")
+                block = row.get("Block Size", "")
+                # Launch Statistics metrics
+                registers = safe_int(self._find_metric(
+                    row, "Registers Per Thread", ["registers_per_thread"],
+                ))
+                shared_mem = safe_int(self._find_metric(
+                    row, "Static Shared Memory Per Block", [
+                        "Static SMem Per Block",
+                        "shared_memory",
+                    ],
+                ))
 
         n = len(launches)
         avg_occupancy = occupancy_sum / n if n > 0 else 0.0
@@ -248,6 +242,24 @@ class NsightComputeEvaluator(BaseEvaluator):
                 kernel_name=name,
             ),
         ])
+
+        # Extra detail metrics when available
+        if sm_busy_sum > 0:
+            metrics.append(Metric(
+                name="sm_busy_pct",
+                value=sm_busy_sum / n,
+                unit="%",
+                category=MetricCategory.COMPUTE,
+                kernel_name=name,
+            ))
+        if l2_hit_sum > 0:
+            metrics.append(Metric(
+                name="l2_hit_rate_pct",
+                value=l2_hit_sum / n,
+                unit="%",
+                category=MetricCategory.MEMORY,
+                kernel_name=name,
+            ))
 
         return KernelSummary(
             name=name,

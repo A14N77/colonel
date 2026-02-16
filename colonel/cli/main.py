@@ -44,11 +44,13 @@ from colonel.cli.analyze_cmd import analyze_app  # noqa: E402
 from colonel.cli.config_cmd import config_app  # noqa: E402
 from colonel.cli.profile_cmd import profile_app  # noqa: E402
 from colonel.cli.session_cmd import session_app  # noqa: E402
+from colonel.cli.setup_cmd import setup_app  # noqa: E402
 
 app.add_typer(profile_app, name="profile", help="Profile GPU kernels and applications.")
 app.add_typer(analyze_app, name="analyze", help="Analyze profiling results with AI.")
 app.add_typer(session_app, name="session", help="Manage profiling sessions.")
 app.add_typer(config_app, name="config", help="Manage colonel configuration.")
+app.add_typer(setup_app, name="setup", help="Interactive environment setup wizard.")
 
 
 # Also register `colonel profile` as a direct command (not just subgroup)
@@ -66,6 +68,7 @@ def run_profile(
         False, "--no-analyze", help="Skip AI analysis after profiling."
     ),
     working_dir: str = typer.Option(".", "--cwd", "-C", help="Working directory for execution."),
+    ssh_key: str = typer.Option("", "--ssh-key", help="Path to SSH private key file."),
 ) -> None:
     """Profile a GPU application and optionally analyze results.
 
@@ -80,4 +83,5 @@ def run_profile(
         name=name,
         no_analyze=no_analyze,
         working_dir=working_dir,
+        ssh_key=ssh_key or None,
     )

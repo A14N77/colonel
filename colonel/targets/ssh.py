@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import getpass
+import shlex
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -16,7 +18,12 @@ class SSHTarget(BaseTarget):
 
     The target URI format is: ssh://user@host[:port]
 
-    Authentication uses the SSH agent or default key files (~/.ssh/id_rsa, etc.).
+    Authentication order:
+    1. Explicit key file (--ssh-key)
+    2. SSH agent (ssh-add)
+    3. Default key files (~/.ssh/id_rsa, id_ed25519, etc.)
+    4. Interactive passphrase prompt if key is encrypted
+
     Password auth is not supported for security reasons.
     """
 
@@ -44,16 +51,68 @@ class SSHTarget(BaseTarget):
 
         self._client = paramiko.SSHClient()
         self._client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self._client.connect(
-            hostname=self._host,
-            port=self._port,
-            username=self._username,
-            key_filename=key_filename,
-            timeout=connect_timeout,
-            allow_agent=True,
-            look_for_keys=True,
-        )
+
+        try:
+            self._client.connect(
+                hostname=self._host,
+                port=self._port,
+                username=self._username,
+                key_filename=key_filename,
+                timeout=connect_timeout,
+                allow_agent=True,
+                look_for_keys=True,
+            )
+        except paramiko.PasswordRequiredException:
+            # Key file is encrypted — prompt for passphrase interactively
+            self._connect_with_passphrase(
+                key_filename=key_filename,
+                connect_timeout=connect_timeout,
+            )
+        except paramiko.AuthenticationException as exc:
+            raise ConnectionError(
+                f"SSH authentication failed for {self._username}@{self._host}:{self._port}.\n"
+                f"  Error: {exc}\n"
+                f"  Try one of:\n"
+                f"    1. Load your key into the agent: ssh-add\n"
+                f"    2. Specify a key file: --ssh-key /path/to/key\n"
+                f"    3. Ensure your public key is on the remote host"
+            ) from exc
+
         self._sftp: paramiko.SFTPClient | None = None
+
+    def _connect_with_passphrase(
+        self,
+        *,
+        key_filename: str | None,
+        connect_timeout: float,
+    ) -> None:
+        """Retry SSH connection after prompting for key passphrase.
+
+        Args:
+            key_filename: Optional path to a private key file.
+            connect_timeout: Connection timeout in seconds.
+        """
+        passphrase = getpass.getpass(
+            f"SSH key passphrase for {self._username}@{self._host}: "
+        )
+        try:
+            self._client.connect(
+                hostname=self._host,
+                port=self._port,
+                username=self._username,
+                key_filename=key_filename,
+                passphrase=passphrase,
+                timeout=connect_timeout,
+                allow_agent=False,
+                look_for_keys=True,
+            )
+        except paramiko.AuthenticationException as exc:
+            raise ConnectionError(
+                f"SSH authentication failed (wrong passphrase or key rejected).\n"
+                f"  Error: {exc}\n"
+                f"  Tip: load your key into the agent to avoid passphrase prompts:\n"
+                f"    ssh-add ~/.ssh/id_ed25519"
+            ) from exc
 
     def _get_sftp(self) -> paramiko.SFTPClient:
         """Get or create an SFTP client."""
@@ -80,13 +139,15 @@ class SSHTarget(BaseTarget):
         Returns:
             CommandResult with captured output.
         """
-        # Build the full command with cd and env
+        # Build the full command with cd and env (shell-escaped)
         parts: list[str] = []
         if env:
-            env_str = " ".join(f"{k}={v}" for k, v in env.items())
-            parts.append(f"export {env_str};")
+            exports = " ".join(
+                f"{k}={shlex.quote(v)}" for k, v in env.items()
+            )
+            parts.append(f"export {exports};")
         if working_dir and working_dir != ".":
-            parts.append(f"cd {working_dir} &&")
+            parts.append(f"cd {shlex.quote(working_dir)} &&")
         parts.append(command)
         full_command = " ".join(parts)
 
@@ -124,8 +185,8 @@ class SSHTarget(BaseTarget):
         remote_dir = str(Path(remote_path).parent)
         try:
             sftp.stat(remote_dir)
-        except FileNotFoundError:
-            self.run_command(f"mkdir -p {remote_dir}")
+        except (FileNotFoundError, OSError):
+            self.run_command(f"mkdir -p {shlex.quote(remote_dir)}")
         sftp.put(str(local_path), remote_path)
 
     def download(self, remote_path: str, local_path: Path) -> None:

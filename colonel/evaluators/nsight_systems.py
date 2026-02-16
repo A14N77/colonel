@@ -122,6 +122,7 @@ class NsightSystemsEvaluator(BaseEvaluator):
             "--stats", "true",
             "--export", "none",
             "--wait", "all",
+            "--trace-fork-before-exec", "true",
             ctx.full_command,
         ]
         return " ".join(cmd_parts)
@@ -268,28 +269,71 @@ class NsightSystemsEvaluator(BaseEvaluator):
         return metrics
 
     def _parse_memory_table(self, text: str) -> list[MemoryTransfer]:
-        """Extract memory transfer info from nsys stats output."""
+        """Extract memory transfer info from nsys stats output.
+
+        nsys stats outputs TWO separate memory tables:
+        - ``cuda_gpu_mem_time_sum``: timing per operation (no sizes)
+        - ``cuda_gpu_mem_size_sum``: sizes per operation (no timing)
+
+        We parse both and merge them by operation name.
+        """
         transfers: list[MemoryTransfer] = []
 
-        section = self._extract_csv_section(text, "CUDA Memory Operation Statistics")
-        if not section:
-            section = self._extract_csv_section(text, "cuda_gpu_mem_time_sum")
+        # Parse the time table
+        time_section = self._extract_csv_section(text, "CUDA Memory Operation Statistics")
+        if not time_section:
+            time_section = self._extract_csv_section(text, "cuda_gpu_mem_time_sum")
+        time_rows = parse_csv_output(time_section)
 
-        rows = parse_csv_output(section)
-        for row in rows:
-            name = row.get("Name", row.get("name", row.get("Operation", "")))
+        # Parse the size table
+        size_section = self._extract_csv_section(text, "cuda_gpu_mem_size_sum")
+        size_rows = parse_csv_output(size_section)
+
+        # Build a lookup from operation name to size in bytes
+        size_by_op: dict[str, int] = {}
+        for row in size_rows:
+            op = row.get("Operation", row.get("Name", row.get("name", "")))
+            if not op:
+                continue
+            # Size table has "Total (MB)" not bytes
+            total_mb = safe_float(row.get("Total (MB)", row.get("Total", "0")))
+            if total_mb > 0:
+                size_by_op[op] = int(total_mb * 1024 * 1024)
+            else:
+                # Fallback: check for bytes column
+                size_by_op[op] = safe_int(
+                    row.get("Total (bytes)", row.get("total_bytes", "0"))
+                )
+
+        for row in time_rows:
+            name = row.get("Operation", row.get("Name", row.get("name", "")))
             if not name:
                 continue
 
-            direction = "HtoD" if "HtoD" in name or "Host" in name else (
-                "DtoH" if "DtoH" in name or "Device" in name else "DtoD"
+            # Direction detection: "Host-to-Device", "Device-to-Host", etc.
+            if "HtoD" in name or "Host-to-Device" in name:
+                direction = "HtoD"
+            elif "DtoH" in name or "Device-to-Host" in name:
+                direction = "DtoH"
+            elif "memset" in name.lower():
+                continue  # Skip memsets, they're not transfers
+            else:
+                direction = "DtoD"
+
+            total_ns = safe_float(
+                row.get("Total Time (ns)", row.get("total_time", "0"))
             )
-            total_ns = safe_float(row.get("Total Time (ns)", row.get("total_time", "0")))
-            size_bytes = safe_int(row.get("Total (bytes)", row.get("total_bytes", "0")))
+            # Get size from the size table (merged by operation name)
+            size_bytes = size_by_op.get(name, 0)
+            # Fallback: check the time row itself (older nsys versions)
+            if size_bytes == 0:
+                size_bytes = safe_int(
+                    row.get("Total (bytes)", row.get("total_bytes", "0"))
+                )
 
             duration_us = total_ns / 1000.0
             throughput = 0.0
-            if duration_us > 0:
+            if duration_us > 0 and size_bytes > 0:
                 throughput = (size_bytes / 1e9) / (duration_us / 1e6)
 
             transfers.append(MemoryTransfer(

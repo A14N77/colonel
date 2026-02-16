@@ -35,7 +35,7 @@ def _resolve_target(ctx: ProfileContext) -> BaseTarget:
         A BaseTarget instance (LocalTarget or SSHTarget).
     """
     if ctx.is_remote:
-        return SSHTarget(ctx.target)
+        return SSHTarget(ctx.target, key_filename=ctx.ssh_key)
     return LocalTarget()
 
 
