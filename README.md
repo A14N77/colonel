@@ -9,6 +9,7 @@
 
 <p align="center">
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white" alt="Python 3.10+"></a>
+  <a href="https://www.nvidia.com"><img src="https://img.shields.io/badge/NVIDIA-Nemotron-brightgreen?logo=nvidia&logoColor=white" alt="NVIDIA Nemotron"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License MIT"></a>
 </p>
 
