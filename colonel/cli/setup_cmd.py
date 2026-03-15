@@ -115,17 +115,25 @@ def _check_cuda() -> bool:
     # nvcc not on PATH — check common install locations
     import glob as globmod
 
-    cuda_homes = sorted(globmod.glob("/usr/local/cuda-*/bin/nvcc"))
+    if sys.platform == "win32":
+        pf = os.environ.get("ProgramFiles", "C:\\Program Files")
+        cuda_homes = sorted(globmod.glob(os.path.join(pf, "NVIDIA GPU Computing Toolkit", "CUDA", "*", "bin", "nvcc.exe")))
+    else:
+        cuda_homes = sorted(globmod.glob("/usr/local/cuda-*/bin/nvcc"))
     if cuda_homes:
         console.print(f"  [warning]nvcc found at {cuda_homes[-1]} but not on PATH.[/warning]")
-        console.print(f"  [dim]Add to your shell profile:  export PATH={os.path.dirname(cuda_homes[-1])}:$PATH[/dim]")
+        if sys.platform == "win32":
+            console.print(f"  [dim]Add to PATH:  {os.path.dirname(cuda_homes[-1])}[/dim]")
+        else:
+            console.print(f"  [dim]Add to your shell profile:  export PATH={os.path.dirname(cuda_homes[-1])}:$PATH[/dim]")
         return True
 
     print_warning("  nvcc not found. CUDA toolkit recommended but not strictly required.")
-    console.print(
-        "  [dim]Install: sudo apt install nvidia-cuda-toolkit[/dim]\n"
-        "  [dim]Or: https://developer.nvidia.com/cuda-downloads[/dim]"
-    )
+    if sys.platform == "win32":
+        console.print("  [dim]Install: https://developer.nvidia.com/cuda-downloads (choose Windows)[/dim]")
+    else:
+        console.print("  [dim]Linux (Ubuntu/Debian): sudo apt install nvidia-cuda-toolkit[/dim]")
+        console.print("  [dim]Or: https://developer.nvidia.com/cuda-downloads (see README 'GPU tools (by OS)')[/dim]")
     return False
 
 
@@ -147,12 +155,20 @@ def _check_nsys() -> tuple[bool, str]:
         candidates.append(on_path)
 
     # 2. Common install locations
-    search_globs = [
-        "/usr/local/bin/nsys",
-        "/opt/nvidia/nsight-systems/*/bin/nsys",
-        "/opt/nvidia/nsight-systems/*/target/linux-x64/nsys",
-        "/usr/lib/nsight-systems/*/bin/nsys",
-    ]
+    if sys.platform == "win32":
+        pf = os.environ.get("ProgramFiles", "C:\\Program Files")
+        search_globs = [
+            os.path.join(pf, "NVIDIA Corporation", "Nsight Systems *", "target-windows-x64", "nsys.exe"),
+            os.path.join(pf, "NVIDIA Corporation", "Nsight Systems *", "bin", "nsys.exe"),
+            os.path.join(pf, "NVIDIA Nsight Systems *", "target-windows-x64", "nsys.exe"),
+        ]
+    else:
+        search_globs = [
+            "/usr/local/bin/nsys",
+            "/opt/nvidia/nsight-systems/*/bin/nsys",
+            "/opt/nvidia/nsight-systems/*/target/linux-x64/nsys",
+            "/usr/lib/nsight-systems/*/bin/nsys",
+        ]
     for pattern in search_globs:
         candidates.extend(sorted(globmod.glob(pattern)))
 
@@ -173,8 +189,8 @@ def _check_nsys() -> tuple[bool, str]:
             if ver_lines:
                 console.print(f"  {ver_lines[0].strip()}")
 
-            # Check if it has execute permission issues (common on apt installs)
-            if not os.access(path, os.X_OK):
+            # Check if it has execute permission issues (common on apt installs; skip on Windows)
+            if sys.platform != "win32" and not os.access(path, os.X_OK):
                 console.print(f"  [warning]Missing execute permission on {path}[/warning]")
                 if _ask_yes("  Fix permissions? (requires sudo)"):
                     parent = os.path.dirname(os.path.dirname(path))
@@ -186,36 +202,37 @@ def _check_nsys() -> tuple[bool, str]:
 
     # Not found — offer to install
     print_error("  nsys not found.")
-    console.print(
-        "  [dim]nsys is required for system-level GPU profiling.[/dim]\n"
-        "  [dim]Install options:[/dim]\n"
-        "  [dim]  Ubuntu/Debian:  sudo apt install nsight-systems[/dim]\n"
-        "  [dim]  From NVIDIA:    https://developer.nvidia.com/nsight-systems[/dim]\n"
-        "  [dim]  CUDA toolkit:   nsys is often bundled with cuda-toolkit packages[/dim]"
-    )
+    console.print("  [dim]nsys is required for system-level GPU profiling.[/dim]")
 
-    if _ask_yes("  Attempt automatic install via apt?", default=False):
-        console.print("  Installing nsight-systems...")
-        ok_install, install_out = _run("sudo apt-get install -y nsight-systems 2>&1", timeout=120)
-        if ok_install:
-            # Re-check
-            nsys_path = shutil.which("nsys")
-            if nsys_path:
-                print_success(f"  nsys installed at {nsys_path}")
-                return True, nsys_path
-            # Sometimes installed but needs PATH or chmod
-            for pattern in search_globs:
-                matches = globmod.glob(pattern)
-                if matches:
-                    path = matches[-1]
-                    _run(f"sudo chmod -R a+rx {os.path.dirname(os.path.dirname(path))}")
-                    print_success(f"  nsys installed at {path}")
-                    return True, path
-        print_warning("  apt install failed. Try installing manually.")
-        if install_out:
-            # Show last few lines of output for debugging
-            for line in install_out.splitlines()[-3:]:
-                console.print(f"  [dim]{line}[/dim]")
+    if sys.platform == "win32":
+        console.print("  [dim]On Windows install manually: https://developer.nvidia.com/nsight-systems[/dim]")
+        console.print("  [dim]Or: winget install NVIDIA.CUDA (often includes nsys). See README 'GPU tools (by OS)'.[/dim]")
+        console.print("  [dim]Then add the install bin folder to your system PATH.[/dim]")
+    else:
+        console.print("  [dim]Linux (Ubuntu/Debian): sudo apt install nsight-systems[/dim]")
+        console.print("  [dim]Or: https://developer.nvidia.com/nsight-systems (see README 'GPU tools (by OS)')[/dim]")
+        if _ask_yes("  Attempt automatic install via apt?", default=False):
+            console.print("  Installing nsight-systems...")
+            ok_install, install_out = _run("sudo apt-get install -y nsight-systems 2>&1", timeout=120)
+            if ok_install:
+                # Re-check
+                nsys_path = shutil.which("nsys")
+                if nsys_path:
+                    print_success(f"  nsys installed at {nsys_path}")
+                    return True, nsys_path
+                # Sometimes installed but needs PATH or chmod
+                for pattern in search_globs:
+                    matches = globmod.glob(pattern)
+                    if matches:
+                        path = matches[-1]
+                        _run(f"sudo chmod -R a+rx {os.path.dirname(os.path.dirname(path))}")
+                        print_success(f"  nsys installed at {path}")
+                        return True, path
+            print_warning("  apt install failed. Try installing manually.")
+            if install_out:
+                # Show last few lines of output for debugging
+                for line in install_out.splitlines()[-3:]:
+                    console.print(f"  [dim]{line}[/dim]")
 
     return False, ""
 
@@ -235,8 +252,14 @@ def _check_ncu() -> tuple[bool, str]:
     if on_path:
         candidates.append(on_path)
 
-    for pattern in ["/usr/local/cuda*/bin/ncu", "/usr/local/cuda/bin/ncu"]:
-        candidates.extend(sorted(globmod.glob(pattern)))
+    if sys.platform == "win32":
+        pf = os.environ.get("ProgramFiles", "C:\\Program Files")
+        candidates.extend(sorted(globmod.glob(os.path.join(pf, "NVIDIA GPU Computing Toolkit", "CUDA", "*", "bin", "ncu.exe"))))
+        candidates.extend(sorted(globmod.glob(os.path.join(pf, "NVIDIA Corporation", "Nsight Compute *", "ncu.exe"))))
+        candidates.extend(sorted(globmod.glob(os.path.join(pf, "NVIDIA Corporation", "Nsight Compute *", "target", "win64", "ncu.exe"))))
+    else:
+        for pattern in ["/usr/local/cuda*/bin/ncu", "/usr/local/cuda/bin/ncu"]:
+            candidates.extend(sorted(globmod.glob(pattern)))
 
     seen: set[str] = set()
     for c in candidates:
@@ -255,11 +278,13 @@ def _check_ncu() -> tuple[bool, str]:
             return True, c
 
     print_warning("  ncu not found (optional — provides detailed per-kernel metrics).")
-    console.print(
-        "  [dim]ncu is bundled with the CUDA toolkit. If you have CUDA installed,[/dim]\n"
-        "  [dim]check that /usr/local/cuda/bin is on your PATH.[/dim]\n"
-        "  [dim]Download: https://developer.nvidia.com/nsight-compute[/dim]"
-    )
+    if sys.platform == "win32":
+        console.print("  [dim]Install: https://developer.nvidia.com/nsight-compute (Windows)[/dim]")
+        console.print("  [dim]Or: winget install Nvidia.Nsight.Compute (see README 'GPU tools (by OS)').[/dim]")
+        console.print("  [dim]Add the install bin folder to PATH.[/dim]")
+    else:
+        console.print("  [dim]Linux: ncu is bundled with CUDA. Add /usr/local/cuda/bin to PATH, or install CUDA: sudo apt install nvidia-cuda-toolkit[/dim]")
+        console.print("  [dim]Or: https://developer.nvidia.com/nsight-compute (see README 'GPU tools (by OS)')[/dim]")
     return False, ""
 
 
@@ -269,6 +294,11 @@ def _check_ncu() -> tuple[bool, str]:
 
 def _check_ncu_permissions() -> bool:
     _step(5, "GPU Performance Counter Permissions")
+
+    if sys.platform == "win32":
+        # Windows does not use the same counter restriction; assume OK
+        print_success("  GPU counters (Windows — no modprobe check).")
+        return True
 
     ok, out = _run("cat /proc/driver/nvidia/params")
     if not ok:
@@ -534,13 +564,18 @@ def setup(
     # ── Step 5: Permissions ─────────────────────────────────────────
     if ncu_ok:
         if check_only:
-            ok, out = _run("cat /proc/driver/nvidia/params")
-            results["permissions"] = ok and "RmProfilingAdminOnly: 0" in out
             _step(5, "GPU Performance Counter Permissions")
-            if results["permissions"]:
-                print_success("  GPU counters accessible to all users.")
+            if sys.platform == "win32":
+                # Windows does not use the same counter restriction
+                results["permissions"] = True
+                print_success("  GPU counters (Windows — no modprobe check).")
             else:
-                print_warning("  GPU counters restricted. Run colonel setup (without --check) to fix.")
+                ok, out = _run("cat /proc/driver/nvidia/params")
+                results["permissions"] = ok and "RmProfilingAdminOnly: 0" in out
+                if results["permissions"]:
+                    print_success("  GPU counters accessible to all users.")
+                else:
+                    print_warning("  GPU counters restricted. Run colonel setup (without --check) to fix.")
         else:
             results["permissions"] = _check_ncu_permissions()
     else:
@@ -548,16 +583,27 @@ def setup(
 
     # ── Step 6: API keys ────────────────────────────────────────────
     if check_only:
-        from colonel.config.settings import get_settings
+        from colonel.config.settings import get_config_dir, get_settings
 
         _step(6, "LLM Provider (AI Analysis)")
         settings = get_settings()
         provider = settings.llm_provider
         has_key = bool(getattr(settings, f"{provider}_api_key", "")) if provider != "openai" else bool(settings.openai_api_key)
+        # If no key from default config load, check project .colonel/config.json (where setup saves)
+        if not has_key and provider and provider != "openai":
+            import json
+            project_config = get_config_dir() / "config.json"
+            if project_config.is_file():
+                try:
+                    data = json.loads(project_config.read_text())
+                    has_key = bool(data.get(f"{provider}_api_key", ""))
+                except (json.JSONDecodeError, OSError):
+                    pass
         if has_key:
             print_success(f"  Provider: {provider} (key configured)")
         else:
             print_warning(f"  Provider: {provider} (no API key set)")
+            console.print("  [dim]Config is in .colonel/config.json (current dir or home). Run from the directory where you ran 'colonel setup', or set COLONEL_ANTHROPIC_API_KEY.[/dim]")
         results["api_key"] = has_key
     else:
         _setup_api_keys()

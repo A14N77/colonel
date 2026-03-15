@@ -32,9 +32,67 @@ Colonel is an open-source, AI-powered command-line tool for profiling GPU kernel
 ```bash
 git clone https://github.com/colonel-gpu/colonel.git
 cd colonel
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate   # Linux
 pip install -e .
 ```
+
+**Windows (PowerShell)** — use this exact workflow (no `&&`; activate the venv separately):
+
+```powershell
+git clone https://github.com/colonel-gpu/colonel.git
+cd colonel
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e .
+```
+
+If you see an execution policy error, run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` once, then run `.venv\Scripts\Activate.ps1` again.
+
+**GPU tools (by OS)** — one-command install where available (Windows: winget; Linux: apt):
+
+| OS | CUDA Toolkit | Nsight Systems (nsys) | Nsight Compute (ncu) |
+|----|--------------|------------------------|----------------------|
+| **Windows** | `winget install NVIDIA.CUDA --accept-package-agreements --accept-source-agreements` | Often with CUDA; else [download](https://developer.nvidia.com/nsight-systems) | `winget install Nvidia.Nsight.Compute --accept-package-agreements --accept-source-agreements` (then add to PATH, see below) |
+| **Linux (Ubuntu/Debian)** | `sudo apt install nvidia-cuda-toolkit` | `sudo apt install nsight-systems` (or [download](https://developer.nvidia.com/nsight-systems)) | Bundled with CUDA in `/usr/local/cuda/bin`, or [download](https://developer.nvidia.com/nsight-compute). Add CUDA bin to PATH if needed. |
+
+**Windows — GPU tools:** install via winget, then add Nsight Compute to PATH so Colonel finds `ncu`:
+
+```powershell
+winget install NVIDIA.CUDA --accept-package-agreements --accept-source-agreements
+winget install Nvidia.Nsight.Compute --accept-package-agreements --accept-source-agreements
+```
+
+Colonel will find `nvcc` and `nsys` in their default install locations. Nsight Compute installs to a path that is not on PATH; add it so `ncu` is detected:
+
+```powershell
+# Current session only:
+$env:Path += ";C:\Program Files\NVIDIA Corporation\Nsight Compute 2025.4.1\target\windows-desktop-win7-x64"
+
+# Or permanently (User PATH):
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Program Files\NVIDIA Corporation\Nsight Compute 2025.4.1\target\windows-desktop-win7-x64", "User")
+```
+
+If your Nsight Compute version is different, find the folder that contains `ncu.exe`:
+
+```powershell
+Get-ChildItem -Path "C:\Program Files\NVIDIA Corporation" -Recurse -Filter "ncu.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty DirectoryName
+```
+
+Then add that directory to PATH as above. If you set PATH permanently, open a new PowerShell window (or run the `$env:Path += ...` line in the current window) so `ncu` is found. If **Nsight Systems (nsys)** is reported missing, install it from [Nsight Systems](https://developer.nvidia.com/nsight-systems) and add its `target-windows-x64` (or `bin`) folder to PATH.
+
+**PyTorch (for smoke test):** in your activated venv:
+
+```powershell
+pip install torch
+```
+
+Then run the setup wizard:
+
+```powershell
+colonel setup
+```
+
+Choose your LLM provider (e.g. Anthropic) and enter your API key when prompted. When everything is OK, you’ll see “Everything looks good!” and can run `colonel run python your_script.py`, `colonel session list`, etc.
 
 ### 2. Run the Setup Wizard
 
