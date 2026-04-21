@@ -63,6 +63,11 @@ def run_profile(
     evaluator: str = typer.Option(
         "auto", "--evaluator", "-e", help="Evaluator: 'nsys', 'ncu', or 'auto'."
     ),
+    flavor: str = typer.Option(
+        "generic", "--flavor", "-f",
+        help="Workload flavor: 'generic' or 'vllm'. 'vllm' sets env + "
+             "ncu/nsys knobs needed to profile real vLLM V1.",
+    ),
     name: str = typer.Option("", "--name", "-n", help="Human-readable label for this run."),
     no_analyze: bool = typer.Option(
         False, "--no-analyze", help="Skip AI analysis after profiling."
@@ -80,6 +85,7 @@ def run_profile(
         args=args or [],
         target=target,
         evaluator=evaluator,
+        flavor=flavor,
         name=name,
         no_analyze=no_analyze,
         working_dir=working_dir,
