@@ -19,7 +19,13 @@ from colonel.core.result import (
 )
 from colonel.evaluators.base import BaseEvaluator
 from colonel.targets.base import BaseTarget
-from colonel.utils.parsers import parse_duration_string, parse_ncu_csv, pivot_ncu_rows, safe_float, safe_int
+from colonel.utils.parsers import (
+    parse_duration_string,
+    parse_ncu_csv,
+    pivot_ncu_rows,
+    safe_float,
+    safe_int,
+)
 
 
 class NsightComputeEvaluator(BaseEvaluator):
@@ -56,17 +62,46 @@ class NsightComputeEvaluator(BaseEvaluator):
     def build_command(self, ctx: ProfileContext) -> str:
         """Build the ncu profiling command.
 
-        Uses --csv for machine-readable output and collects a standard
-        set of metrics for comprehensive analysis.
+        Uses --csv for machine-readable output and a standard metric set.
+        Workload flavors (e.g. vllm) can override knobs via
+        ``ctx.metadata``:
+
+        - ``ncu_set`` (default ``"full"``): value for ``--set`` (ncu
+          "set" names: default, basic, full, detailed, roofline, source).
+          Ignored when ``ncu_section`` is provided.
+        - ``ncu_section`` (default unset): value for ``--section``,
+          e.g. ``"SpeedOfLight"``. Use this to profile one section
+          instead of a full set; avoids multi-pass replay determinism
+          issues on workloads like vLLM.
+        - ``ncu_replay_mode`` (default unset = ncu's ``"kernel"``):
+          e.g. ``"application"`` for workloads whose per-kernel replay
+          distorts timing or OOMs.
+        - ``ncu_profile_from_start`` (default unset = ncu's ``"on"``):
+          set to ``"off"`` when the target calls ``cudaProfilerStart/
+          Stop`` itself (e.g. via ``colonel.profiling.vllm.profile_region``).
         """
         cmd_parts = [
             self._ncu_path,
             "--csv",
             "--log-file", "/dev/stdout",
-            "--set", "full",
             "--target-processes", "all",
-            ctx.full_command,
         ]
+        section = ctx.metadata.get("ncu_section")
+        if section:
+            cmd_parts.extend(["--section", str(section)])
+        else:
+            # Back-compat: `ncu_sections` was the original key; honor both.
+            set_name = ctx.metadata.get("ncu_set") or ctx.metadata.get(
+                "ncu_sections", "full"
+            )
+            cmd_parts.extend(["--set", str(set_name)])
+        replay_mode = ctx.metadata.get("ncu_replay_mode")
+        if replay_mode:
+            cmd_parts.extend(["--replay-mode", str(replay_mode)])
+        profile_from_start = ctx.metadata.get("ncu_profile_from_start")
+        if profile_from_start:
+            cmd_parts.extend(["--profile-from-start", str(profile_from_start)])
+        cmd_parts.append(ctx.full_command)
         return " ".join(cmd_parts)
 
     def parse_output(

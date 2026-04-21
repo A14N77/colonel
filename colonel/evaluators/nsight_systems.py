@@ -109,22 +109,40 @@ class NsightSystemsEvaluator(BaseEvaluator):
         """Build the nsys profile command.
 
         Generates a command that profiles the application and writes
-        a .nsys-rep file to a temp location.
+        a .nsys-rep file to a temp location. Workload flavors can
+        override knobs via ``ctx.metadata``:
+
+        - ``nsys_trace`` (default ``"cuda,nvtx,osrt"``): value for --trace.
+        - ``nsys_capture_range`` (default unset): value for
+          ``--capture-range``, e.g. ``"cudaProfilerApi"``. When set we
+          also pass ``--capture-range-end stop`` so nsys halts with the
+          cudaProfilerStop call, not the process exit.
+        - ``nsys_enable_nvtx`` (default False): if True, ensure "nvtx"
+          is present in --trace (usually already the default).
         """
         nsys_bin = self._resolved_nsys_path or self._nsys_path
         report_file = self._report_base_path(ctx)
+        trace = str(ctx.metadata.get("nsys_trace", "cuda,nvtx,osrt"))
+        if ctx.metadata.get("nsys_enable_nvtx") and "nvtx" not in trace:
+            trace = trace + ",nvtx"
         cmd_parts = [
             nsys_bin,
             "profile",
             "--output", report_file,
             "--force-overwrite", "true",
-            "--trace", "cuda,nvtx,osrt",
+            "--trace", trace,
             "--stats", "true",
             "--export", "none",
             "--wait", "all",
             "--trace-fork-before-exec", "true",
-            ctx.full_command,
         ]
+        capture_range = ctx.metadata.get("nsys_capture_range")
+        if capture_range:
+            cmd_parts.extend([
+                "--capture-range", str(capture_range),
+                "--capture-range-end", "stop",
+            ])
+        cmd_parts.append(ctx.full_command)
         return " ".join(cmd_parts)
 
     def _build_stats_command(self, report_base: str) -> str:
